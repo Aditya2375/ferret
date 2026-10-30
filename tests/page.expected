@@ -1,0 +1,17 @@
+Ferret test page                                                                
+                                                                                
+A paragraph with a link [1] inside.                                             
+  * first                                                                       
+  * second                                                                      
+                                                                                
+                                                                                
+Name   Value                                                                    
+-----  -----                                                                    
+alpha  1                                                                        
+beta   2                                                                        
+                                                                                
+pre  kept                                                                       
+   spacing                                                                      
+
+Links:
+[1] https://example.com
