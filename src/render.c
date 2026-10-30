@@ -110,8 +110,10 @@ static void emit(struct ctx *c, const char *text, char attr, int indent) {
             newline(c);
         if (c->x < indent) c->x = indent;
         if (c->x > indent && c->x > 0) { grid_put(&c->g, c->y, c->x, ' ', 0); c->x++; }
-        for (int i = 0; i < wlen && c->x < c->width; i++, c->x++)
+        for (int i = 0; i < wlen; i++, c->x++) {
+            if (c->x >= c->width) newline(c);  /* hard-wrap an over-long word */
             grid_put(&c->g, c->y, c->x, p[i], attr);
+        }
         p = e;
     }
 }
@@ -139,6 +141,23 @@ static void emit_deep_text(struct ctx *c, struct node *n, char attr, int indent)
     }
 }
 
+/* Collect all text under a cell, including text nested in inline
+ * elements such as <b> or <a>, in document order. */
+static void cell_text(struct node *td, char *buf, size_t bufsz) {
+    buf[0] = '\0';
+    struct node *root = td;
+    td = td->first_child;
+    while (td) {
+        if (td->type == NODE_TEXT && td->text) {
+            size_t cur = strlen(buf);
+            if (cur + 1 < bufsz) snprintf(buf + cur, bufsz - cur, "%s", td->text);
+        }
+        if (td->first_child) { td = td->first_child; continue; }
+        while (td != root && !td->next_sibling) td = td->parent;
+        td = (td == root) ? NULL : td->next_sibling;
+    }
+}
+
 /* Render a simple table: fixed column widths from the widest cell. */
 static void walk_table(struct ctx *c, struct node *table, char attr, int indent) {
     /* collect rows from thead/tbody sections and direct tr children */
@@ -161,13 +180,7 @@ static void walk_table(struct ctx *c, struct node *table, char attr, int indent)
         int col = 0;
         for (struct node *td = rows[i]->first_child; td && col < 16; td = td->next_sibling) {
             if (!node_is(td, "td") && !node_is(td, "th")) continue;
-            cells[i][col][0] = '\0';
-            for (struct node *t = td->first_child; t; t = t->next_sibling) {
-                if (t->type == NODE_TEXT && t->text) {
-                    size_t cur = strlen(cells[i][col]);
-                    snprintf(cells[i][col] + cur, sizeof cells[i][col] - cur, "%s", t->text);
-                }
-            }
+            cell_text(td, cells[i][col], sizeof cells[i][col]);
             col++;
         }
         if (col > ncols) ncols = col;
