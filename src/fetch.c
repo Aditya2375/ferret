@@ -187,92 +187,149 @@ static int conn_write_all(struct conn *c, const char *buf, size_t n) {
     return 0;
 }
 
+struct url_parts {
+    int  tls;
+    char host[256];
+    char port[8];
+    char path[1024];
+    char full[2048];    /* current URL, for the document's final_url */
+};
+
+static int parse_http_url(const char *url, struct url_parts *u,
+                          char *err, int err_cap) {
+    const char *p;
+    if (strncmp(url, "http://", 7) == 0)       { u->tls = 0; p = url + 7; }
+    else if (strncmp(url, "https://", 8) == 0) { u->tls = 1; p = url + 8; }
+    else {
+        snprintf(err, err_cap, "unsupported scheme (ferret speaks file://, http://, https://): %s", url);
+        return -1;
+    }
+    u->host[0] = '\0';
+    snprintf(u->port, sizeof u->port, "%s", u->tls ? "443" : "80");
+    const char *slash = strchr(p, '/');
+    const char *hend = slash ? slash : p + strlen(p);
+    const char *colon = memchr(p, ':', (size_t)(hend - p));
+    if (colon) {
+        snprintf(u->host, sizeof u->host, "%.*s", (int)(colon - p), p);
+        snprintf(u->port, sizeof u->port, "%.*s", (int)(hend - colon - 1), colon + 1);
+    } else {
+        snprintf(u->host, sizeof u->host, "%.*s", (int)(hend - p), p);
+    }
+    snprintf(u->path, sizeof u->path, "%s", slash ? slash : "/");
+    if (!u->host[0]) { snprintf(err, err_cap, "no host in %s", url); return -1; }
+    snprintf(u->full, sizeof u->full, "%s", url);
+    return 0;
+}
+
+static void rebuild_full(struct url_parts *u) {
+    int default_port = (u->tls && strcmp(u->port, "443") == 0) ||
+                       (!u->tls && strcmp(u->port, "80") == 0);
+    snprintf(u->full, sizeof u->full, "%s://%s%s%s%s",
+             u->tls ? "https" : "http", u->host,
+             default_port ? "" : ":", default_port ? "" : u->port, u->path);
+}
+
+/* Resolve a redirect Location against the current URL (RFC 3986 5.2):
+ * an absolute URI replaces everything, "/..." replaces the path, and
+ * anything else merges into the current path's directory. */
+static int resolve_redirect(struct url_parts *u, const char *loc,
+                            char *err, int err_cap) {
+    if (strstr(loc, "://"))
+        return parse_http_url(loc, u, err, err_cap);
+    if (loc[0] == '/') {
+        if (strlen(loc) >= sizeof u->path) goto toolong;
+        snprintf(u->path, sizeof u->path, "%s", loc);
+    } else {
+        char *last = strrchr(u->path, '/');   /* path always starts with / */
+        size_t dirlen = (size_t)(last + 1 - u->path);
+        if (dirlen + strlen(loc) >= sizeof u->path) goto toolong;
+        snprintf(u->path + dirlen, sizeof u->path - dirlen, "%s", loc);
+    }
+    rebuild_full(u);
+    return 0;
+toolong:
+    snprintf(err, err_cap, "redirect target too long: %.64s...", loc);
+    return -1;
+}
+
 struct document *fetch_url(const char *url, char *err, int err_cap) {
     if (strncmp(url, "file://", 7) == 0)
         return fetch_file(url + 7, url, err, err_cap);
     if (strstr(url, "://") == NULL)  /* bare path: treat as local file */
         return fetch_file(url, url, err, err_cap);
 
-    int tls;
-    const char *p;
-    if (strncmp(url, "http://", 7) == 0)  { tls = 0; p = url + 7; }
-    else if (strncmp(url, "https://", 8) == 0) { tls = 1; p = url + 8; }
-    else {
-        snprintf(err, err_cap, "unsupported scheme (ferret speaks file://, http://, https://): %s", url);
+    struct url_parts u;
+    if (parse_http_url(url, &u, err, err_cap) != 0)
         return NULL;
-    }
 
-    char host[256] = {0}, port[8], path[1024] = "/";
-    snprintf(port, sizeof port, "%s", tls ? "443" : "80");
-    const char *slash = strchr(p, '/');
-    const char *hend = slash ? slash : p + strlen(p);
-    const char *colon = memchr(p, ':', (size_t)(hend - p));
-    if (colon) {
-        snprintf(host, sizeof host, "%.*s", (int)(colon - p), p);
-        snprintf(port, sizeof port, "%.*s", (int)(hend - colon - 1), colon + 1);
-    } else {
-        snprintf(host, sizeof host, "%.*s", (int)(hend - p), p);
-    }
-    if (slash) snprintf(path, sizeof path, "%s", slash);
-    if (!host[0]) { snprintf(err, err_cap, "no host in %s", url); return NULL; }
-
-    int redirects = 0;
-redirect:;
-    struct conn c;
-    if (conn_open(&c, host, port, tls, err, err_cap) != 0) return NULL;
-    char req[2048];
-    int reqlen = snprintf(req, sizeof req,
-        "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: ferret/1.0\r\n"
-        "Accept: text/html\r\nConnection: close\r\n\r\n", path, host);
-    if (conn_write_all(&c, req, (size_t)reqlen) != 0) {
-        conn_close(&c);
-        snprintf(err, err_cap, "write to %s failed", host);
-        return NULL;
-    }
-    size_t cap = 1 << 20, len = 0;
-    char *buf = malloc(cap + 1);
-    if (!buf) { perror("malloc"); exit(1); }
-    ssize_t n;
-    while ((n = conn_read(&c, buf + len, cap - len)) > 0) {
-        len += (size_t)n;
-        if (len == cap) {
-            cap *= 2;
-            buf = realloc(buf, cap + 1);
-            if (!buf) { perror("realloc"); exit(1); }
-        }
-    }
-    conn_close(&c);
-    buf[len] = '\0';
-
-    /* split headers */
-    char *hdr_end = strstr(buf, "\r\n\r\n");
-    if (!hdr_end) { free(buf); snprintf(err, err_cap, "malformed HTTP response from %s", host); return NULL; }
     int status = 0;
-    sscanf(buf, "HTTP/%*d.%*d %d", &status);
-    if ((status == 301 || status == 302 || status == 307 || status == 308) && redirects < 5) {
-        char *loc = strcasestr(buf, "\r\nLocation:");
-        if (loc) {
-            loc += 11;
-            while (*loc == ' ') loc++;
-            char *eol = strstr(loc, "\r\n");
-            if (eol) *eol = '\0';
-            if (loc[0] == '/') { snprintf(path, sizeof path, "%s", loc); }
-            else if (strstr(loc, "://")) {
-                free(buf);
-                return fetch_url(loc, err, err_cap);
-            }
-            redirects++;
-            free(buf);
-            goto redirect;
+    char *buf = NULL;
+    size_t len = 0;
+    char *hdr_end = NULL;
+    int redirects = 0;
+    for (;;) {
+        struct conn c;
+        if (conn_open(&c, u.host, u.port, u.tls, err, err_cap) != 0) return NULL;
+        char req[2048];
+        int reqlen = snprintf(req, sizeof req,
+            "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: ferret/1.0\r\n"
+            "Accept: text/html\r\nConnection: close\r\n\r\n", u.path, u.host);
+        if (conn_write_all(&c, req, (size_t)reqlen) != 0) {
+            conn_close(&c);
+            snprintf(err, err_cap, "write to %s failed", u.host);
+            return NULL;
         }
+        size_t cap = 1 << 20;
+        len = 0;
+        buf = malloc(cap + 1);
+        if (!buf) { perror("malloc"); exit(1); }
+        ssize_t n;
+        while ((n = conn_read(&c, buf + len, cap - len)) > 0) {
+            len += (size_t)n;
+            if (len == cap) {
+                cap *= 2;
+                buf = realloc(buf, cap + 1);
+                if (!buf) { perror("realloc"); exit(1); }
+            }
+        }
+        conn_close(&c);
+        buf[len] = '\0';
+
+        hdr_end = strstr(buf, "\r\n\r\n");
+        if (!hdr_end) {
+            free(buf);
+            snprintf(err, err_cap, "malformed HTTP response from %s", u.host);
+            return NULL;
+        }
+        status = 0;
+        sscanf(buf, "HTTP/%*d.%*d %d", &status);
+        if ((status == 301 || status == 302 || status == 307 || status == 308)
+                && redirects < 5) {
+            char *loc = strcasestr(buf, "\r\nLocation:");
+            if (loc) {
+                loc += 11;
+                while (*loc == ' ') loc++;
+                char *eol = strstr(loc, "\r\n");
+                char locbuf[2048];
+                snprintf(locbuf, sizeof locbuf, "%.*s",
+                         eol ? (int)(eol - loc) : (int)strlen(loc), loc);
+                free(buf);
+                buf = NULL;
+                if (resolve_redirect(&u, locbuf, err, err_cap) != 0)
+                    return NULL;
+                redirects++;    /* one counter across absolute and relative hops */
+                continue;
+            }
+        }
+        break;
     }
     if (status != 200) {
         free(buf);
-        snprintf(err, err_cap, "HTTP %d from %s%s", status, host, path);
+        snprintf(err, err_cap, "HTTP %d from %s%s", status, u.host, u.path);
         return NULL;
     }
     long blen = (long)(len - (size_t)(hdr_end + 4 - buf));
     memmove(buf, hdr_end + 4, (size_t)blen);
     buf[blen] = '\0';
-    return doc_new(buf, blen, url);
+    return doc_new(buf, blen, u.full);
 }

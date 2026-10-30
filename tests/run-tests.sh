@@ -17,4 +17,21 @@ cc -std=gnu11 -O2 -g -Wall -Wextra -Werror -Isrc \
 ./build/ferret tests/page.html --no-color > "$OUT/got.txt"
 diff -u tests/page.expected "$OUT/got.txt"
 echo "RENDER TEST PASSED"
+
+# redirect handling against a local server: relative, absolute-path and
+# absolute-URL hops must chain, and a redirect loop must stay bounded
+if command -v python3 >/dev/null; then
+    python3 tests/redirect_server.py &
+    SRV=$!
+    trap 'kill $SRV 2>/dev/null' EXIT
+    sleep 1
+    ./build/ferret http://127.0.0.1:8799/start --no-color > "$OUT/redirect.txt"
+    grep -q "made it" "$OUT/redirect.txt" || { echo "redirect chain failed"; exit 1; }
+    if ./build/ferret http://127.0.0.1:8799/loop1 > /dev/null 2>&1; then
+        echo "redirect loop was not bounded"; exit 1
+    fi
+    kill $SRV 2>/dev/null
+    trap - EXIT
+    echo "REDIRECT TESTS PASSED"
+fi
 echo "ALL TESTS PASSED"
