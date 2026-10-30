@@ -1,5 +1,6 @@
 CC      ?= cc
-CFLAGS  ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -Isrc
+CFLAGS  ?= -O2 -g
+CFLAGS  += -std=gnu11 -Wall -Wextra -Werror -Isrc
 BIN     := build/ferret
 SRCS    := src/main.c src/html.c src/css.c src/render.c src/fetch.c
 
