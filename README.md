@@ -65,3 +65,14 @@ src/     html.c (parser), css.c (engine), render.c (layout), fetch.c (HTTP), mai
 tests/   unit tests, golden render fixture
 docs/    architecture notes
 ```
+
+## Tested / not tested
+
+Tested here: 24 parser/cascade unit checks, a byte-exact golden render,
+fetching and rendering a live page over both http:// and https:// (real
+TLS with SNI and certificate verification), and rejection of a self-signed
+certificate.
+
+Not tested: JavaScript-heavy sites (ferret renders documents, there is no
+JS engine), chunked transfer encoding or keep-alive (HTTP/1.0
+connection-close only), and very large pages.
