@@ -77,5 +77,42 @@ int main(void) {
     stylesheet_free(ss);
     node_free(r);
 
+    /* compound class selectors: .a.b requires BOTH classes */
+    ss = css_parse(".a.b { color: magenta } .b { color: silver }");
+    r = html_parse(
+        "<div><p class=\"a\">one</p><p class=\"b\">two</p>"
+        "<p class=\"a b\">three</p><p class=\"b a\">four</p></div>");
+    styles = NULL;
+    n = css_apply(ss, r, &styles);
+    /* .a.b has specificity 20, so it also wins over .b (10) on "three"/"four" */
+    const struct style *w = find_style(r, styles, "p", NULL, "a b");
+    CHECK(w != NULL, "compound .a.b found element with both classes");
+    CHECK_STR(style_get(w, "color"), "magenta", ".a.b matches element with both classes");
+    CHECK(find_style(r, styles, "p", NULL, "a") != NULL, "class=a element exists");
+    w = find_style(r, styles, "p", NULL, "b a");
+    CHECK(w != NULL, "class order irrelevant");
+    CHECK_STR(style_get(w, "color"), "magenta", ".a.b matches class=\"b a\" too");
+    /* the bare-.b paragraph: .a.b must NOT match it, .b applies */
+    {
+        struct node *order[512];
+        int cnt = collect(r, order, 0);
+        int bare = 0;
+        for (int k = 0; k < cnt; k++) {
+            const char *c = node_attr(order[k], "class");
+            if (c && strcmp(c, "b") == 0) {
+                CHECK_STR(style_get(&styles[k], "color"), "silver", ".a.b does not match class=\"b\" alone");
+                bare |= 1;
+            }
+            if (c && strcmp(c, "a") == 0) {
+                CHECK(style_get(&styles[k], "color") == NULL, ".a.b does not match class=\"a\" alone");
+                bare |= 2;
+            }
+        }
+        CHECK(bare == 3, "both single-class elements visited");
+    }
+    styles_free(styles, n);
+    stylesheet_free(ss);
+    node_free(r);
+
     TEST_RESULTS();
 }

@@ -23,6 +23,8 @@ static const char *skip_ws_comments(const char *p) {
     }
 }
 
+static void selector_free(struct selector *sel);
+
 static int selector_parse(const char *s, size_t len, struct selector *sel) {
     memset(sel, 0, sizeof *sel);
     size_t i = 0;
@@ -39,16 +41,22 @@ static int selector_parse(const char *s, size_t len, struct selector *sel) {
             else for (char *c = t; *c; c++) *c = tolower((unsigned char)*c);
             part->tag = t;
         }
-        /* .class and #id */
+        /* .class and #id - a compound keeps every class: .a.b needs both */
         while (i < len && (s[i] == '.' || s[i] == '#')) {
             char kind = s[i++];
             start = i;
             while (i < len && (isalnum((unsigned char)s[i]) || s[i] == '-' || s[i] == '_')) i++;
+            if (i == start) { selector_free(sel); return 0; }
             char *v = xstrndup(s + start, i - start);
-            if (kind == '.') { free(part->cls); part->cls = v; }
-            else { free(part->id); part->id = v; }
+            if (kind == '.') {
+                if (part->ncls >= SELECTOR_MAX_CLASSES) { free(v); selector_free(sel); return 0; }
+                part->cls[part->ncls++] = v;
+            } else {
+                free(part->id);
+                part->id = v;
+            }
         }
-        if (!part->tag && !part->id && !part->cls) return 0;
+        if (!part->tag && !part->id && part->ncls == 0) return 0;
         sel->nparts++;
         while (i < len && isspace((unsigned char)s[i])) i++;  /* descendant combinator */
     }
@@ -57,9 +65,10 @@ static int selector_parse(const char *s, size_t len, struct selector *sel) {
 
 static void selector_free(struct selector *sel) {
     for (int i = 0; i < sel->nparts; i++) {
+        for (int k = 0; k < sel->parts[i].ncls; k++)
+            free(sel->parts[i].cls[k]);
         free(sel->parts[i].tag);
         free(sel->parts[i].id);
-        free(sel->parts[i].cls);
     }
 }
 
@@ -166,18 +175,18 @@ static int part_matches(const struct selector_part *part, const struct node *el)
         const char *id = node_attr(el, "id");
         if (!id || strcmp(id, part->id) != 0) return 0;
     }
-    if (part->cls) {
+    for (int k = 0; k < part->ncls; k++) {
         const char *cls = node_attr(el, "class");
         if (!cls) return 0;
         /* class attribute is a space-separated list */
-        size_t want = strlen(part->cls);
+        size_t want = strlen(part->cls[k]);
         const char *p = cls;
         int found = 0;
         while (*p) {
             while (*p == ' ') p++;
             const char *e = p;
             while (*e && *e != ' ') e++;
-            if ((size_t)(e - p) == want && strncmp(p, part->cls, want) == 0) { found = 1; break; }
+            if ((size_t)(e - p) == want && strncmp(p, part->cls[k], want) == 0) { found = 1; break; }
             p = e;
         }
         if (!found) return 0;
@@ -200,7 +209,7 @@ static int specificity(const struct selector *sel) {
     int ids = 0, clss = 0, tags = 0;
     for (int i = 0; i < sel->nparts; i++) {
         if (sel->parts[i].id) ids++;
-        if (sel->parts[i].cls) clss++;
+        clss += sel->parts[i].ncls;
         if (sel->parts[i].tag) tags++;
     }
     return ids * 100 + clss * 10 + tags;

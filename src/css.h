@@ -12,10 +12,13 @@ struct declaration {
     struct declaration *next;
 };
 
+#define SELECTOR_MAX_CLASSES 4
+
 struct selector_part {           /* one compound selector */
     char *tag;                   /* NULL or "*" = any */
     char *id;                    /* NULL = any */
-    char *cls;                   /* NULL = any (single class) */
+    char *cls[SELECTOR_MAX_CLASSES]; /* every class must be present */
+    int ncls;
 };
 
 struct selector {
