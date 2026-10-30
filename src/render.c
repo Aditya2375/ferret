@@ -80,7 +80,8 @@ struct ctx {
     struct style *styles;
     int nstyles;
     int link_count;
-    struct { char *url; int n; } links[256];
+    struct link { char *url; int n; } *links;
+    int links_cap;
 };
 
 static const struct style *style_of(struct ctx *c, const struct node *el) {
@@ -279,7 +280,12 @@ static void walk(struct ctx *c, struct node *n, char attr, int indent, int depth
     } else if (strcmp(tag, "a") == 0) {
         walk_children(c, n, myattr ? myattr : 'u', indent, depth + 1);
         const char *href = node_attr(n, "href");
-        if (href && c->link_count < 256) {
+        if (href) {
+            if (c->link_count == c->links_cap) {
+                c->links_cap = c->links_cap ? c->links_cap * 2 : 64;
+                c->links = realloc(c->links, (size_t)c->links_cap * sizeof *c->links);
+                if (!c->links) { perror("realloc"); exit(1); }
+            }
             int num = ++c->link_count;
             c->links[num - 1].url = strdup(href);
             c->links[num - 1].n = num;
@@ -360,6 +366,7 @@ int render_document(struct node *root, const struct stylesheet *ss,
     free(c.g.cells);
     free(c.g.attrs);
     for (int i = 0; i < c.link_count; i++) free(c.links[i].url);
+    free(c.links);
     styles_free(c.styles, c.nstyles);
     return c.g.rows;
 
