@@ -1,4 +1,5 @@
 #include "../harness.h"
+#include <stdlib.h>
 #include <string.h>
 #include "html.h"
 
@@ -57,6 +58,23 @@ int main(void) {
     CHECK(pp && pp->first_child && pp->first_child->text &&
           strstr(pp->first_child->text, "&") != NULL, "amp decoded");
     CHECK(strstr(pp->first_child->text, "A") != NULL, "numeric ref decoded");
+    node_free(r);
+
+    /* entities without semicolons: numeric refs still decode and are
+     * consumed (no double print); unknown names stay literal */
+    r = html_parse("<p>A&#66C D&#x45;F &bogus;</p>");
+    pp = node_find(r, "p");
+    CHECK(pp && pp->first_child && pp->first_child->text &&
+          strcmp(pp->first_child->text, "ABC DEF &bogus;") == 0,
+          "semicolon-less numeric refs decode once, unknown names literal");
+    node_free(r);
+
+    /* a lone ampersand is literal text */
+    r = html_parse("<p>salt & pepper</p>");
+    pp = node_find(r, "p");
+    CHECK(pp && pp->first_child && pp->first_child->text &&
+          strcmp(pp->first_child->text, "salt & pepper") == 0,
+          "lone ampersand literal");
     node_free(r);
 
     /* garbage in, no crash */

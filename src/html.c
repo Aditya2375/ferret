@@ -32,6 +32,7 @@ static struct node *node_new(enum node_type type) {
     struct node *n = calloc(1, sizeof *n);
     if (!n) { perror("calloc"); exit(1); }
     n->type = type;
+    n->style_index = -1;
     return n;
 }
 
@@ -73,32 +74,35 @@ static const char *parse_tag_name(const char *p, char *buf, size_t cap) {
 }
 
 /* Decode the handful of named entities that matter in real pages, and
-   numeric character references. Returns bytes written to out. */
+   numeric character references. p points just past '&'; returns the number
+   of input bytes consumed (still past '&'), or 0 when the sequence is not
+   an entity and the '&' should be emitted literally. */
 static size_t decode_entity(const char *p, char *out) {
-    /* p points just past '&' */
     struct { const char *name; char ch; } named[] = {
         {"amp;", '&'}, {"lt;", '<'}, {"gt;", '>'}, {"quot;", '"'},
         {"apos;", '\''}, {"nbsp;", ' '}, {NULL, 0}
     };
     if (*p == '#') {
-        p++;
+        const char *q = p + 1;
         int base = 10;
-        if (*p == 'x' || *p == 'X') { base = 16; p++; }
-        long v = strtol(p, (char **)&p, base);
-        if (*p == ';') p++;
-        if (v > 0 && v < 128) { out[0] = (char)v; return 1; }
-        out[0] = ' ';
-        return 1;
+        if (*q == 'x' || *q == 'X') { base = 16; q++; }
+        char *stop = NULL;
+        long v = strtol(q, &stop, base);
+        if (stop == q) return 0;    /* no digits: literal '&' */
+        q = stop;
+        if (*q == ';') q++;         /* the semicolon is optional */
+        if (v > 0 && v < 128) *out = (char)v;
+        else *out = ' ';
+        return (size_t)(q - p);
     }
     for (int i = 0; named[i].name; i++) {
         size_t len = strlen(named[i].name);
         if (strncmp(p, named[i].name, len) == 0) {
-            out[0] = named[i].ch;
-            return 1;
+            *out = named[i].ch;
+            return len;
         }
     }
-    out[0] = '&';
-    return 1;
+    return 0;
 }
 
 /* Append text to parent's last text child, or create one. */
