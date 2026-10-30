@@ -8,3 +8,4 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - run: make TLS=1
       - run: ./tests/run-tests.sh
+      - run: ./tests/check-docs.sh

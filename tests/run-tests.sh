@@ -42,4 +42,12 @@ open('$OUT/deep.html', 'w').write('<html><body>' + '<div>' * d + 'DEEP CONTENT' 
         || { echo "deep nesting crashed or lost content"; exit 1; }
     echo "DEEP RENDER PASSED"
 fi
+# TLS: only when this binary was built with make TLS=1
+# a closed localhost port fails differently with and without TLS support
+if ./build/ferret https://127.0.0.1:1/ 2>&1 | grep -q "without TLS support"; then
+    echo "TLS TEST SKIPPED (binary built without TLS)"
+else
+    ./tests/tls_test.sh
+fi
+
 echo "ALL TESTS PASSED"

@@ -54,7 +54,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ./tests/run-tests.sh
 ```
 
-Runs the HTML-parser and CSS-cascade unit suites (24 checks) and a golden
+Runs the HTML-parser and CSS-cascade unit suites (36 checks) and a golden
 end-to-end render: the sample page is rendered and diffed byte-for-byte
 against `tests/page.expected`. CI runs the same script on every push.
 
@@ -68,13 +68,22 @@ docs/    architecture notes
 
 ## Tested / not tested
 
-Tested here: 24 parser/cascade unit checks (including entities without
-semicolons, lone ampersands, and a 100k-deep document), a byte-exact
-golden render, fetching and rendering a live page over both http:// and
-https:// (real TLS with SNI and certificate verification), rejection of a
-self-signed certificate, a three-hop redirect chain covering relative,
-absolute-path, and absolute-URL Location values against a local server,
-a bounded redirect loop, and a 50k-deep page rendering without a crash.
+Tested here: 36 parser/cascade unit checks (including entities without
+semicolons, lone ampersands, compound .a.b selectors, and a 100k-deep
+document), a byte-exact golden render (word wrap, long-word hard wrap,
+ordered and unordered lists, tables with inline markup in cells), a
+300-link page, fetching and rendering a live page over both http:// and
+https:// (real TLS with SNI and certificate verification), acceptance of
+a locally trusted certificate and rejection of an untrusted self-signed
+one (both against a local TLS server), a three-hop redirect chain
+covering relative, absolute-path, scheme-relative, and absolute-URL
+Location values, a bounded redirect loop, and a 50k-deep page rendering
+without a crash. `tests/check-docs.sh` keeps the counts above honest:
+CI fails if the stated check count drifts from what the suites run.
+
+Known limits: tables render up to 64 rows x 16 columns, cell text is
+truncated at 127 bytes, and column widths cap at 24 characters.
+Rendering below 256 nesting levels is styled; deeper text renders flat.
 
 Not tested: JavaScript-heavy sites (ferret renders documents, there is no
 JS engine), chunked transfer encoding or keep-alive (HTTP/1.0
