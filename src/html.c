@@ -310,11 +310,14 @@ int node_is(const struct node *n, const char *tag) {
     return n->type == NODE_ELEMENT && n->tag && strcmp(n->tag, tag) == 0;
 }
 
-struct node *node_find(const struct node *n, const char *tag) {
-    if (node_is(n, tag)) return (struct node *)n;
-    for (struct node *c = n->first_child; c; c = c->next_sibling) {
-        struct node *hit = node_find(c, tag);
-        if (hit) return hit;
+struct node *node_find(const struct node *root, const char *tag) {
+    /* iterative pre-order: pathological nesting must not blow the stack */
+    const struct node *n = root;
+    while (n) {
+        if (node_is(n, tag)) return (struct node *)n;
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n != root && !n->next_sibling) n = n->parent;
+        n = (n == root) ? NULL : n->next_sibling;
     }
     return NULL;
 }

@@ -236,6 +236,12 @@ static int resolve_redirect(struct url_parts *u, const char *loc,
                             char *err, int err_cap) {
     if (strstr(loc, "://"))
         return parse_http_url(loc, u, err, err_cap);
+    if (loc[0] == '/' && loc[1] == '/') {
+        /* scheme-relative target: keep the current scheme */
+        char abs[2048];
+        snprintf(abs, sizeof abs, "%s:%s", u->tls ? "https" : "http", loc);
+        return parse_http_url(abs, u, err, err_cap);
+    }
     if (loc[0] == '/') {
         if (strlen(loc) >= sizeof u->path) goto toolong;
         snprintf(u->path, sizeof u->path, "%s", loc);

@@ -3,6 +3,9 @@ Ferret test page
 A paragraph with a link [1] inside.                                             
   * first                                                                       
   * second                                                                      
+  1. one                                                                        
+  2. two                                                                        
+  3. three                                                                      
                                                                                 
                                                                                 
 Name   Value                                                                    

@@ -259,9 +259,17 @@ static void walk(struct ctx *c, struct node *n, char attr, int indent, int depth
     } else if (strcmp(tag, "li") == 0) {
         if (c->x > indent) newline(c);
         if (c->x < indent) c->x = indent;
-        emit(c, "*", 0, indent);
-        c->x = indent + 2;
-        walk_children(c, n, myattr, indent + 2, depth + 1);
+        char marker[16] = "*";
+        if (n->parent && node_is(n->parent, "ol")) {
+            int num = 1;
+            for (struct node *sib = n->parent->first_child; sib && sib != n; sib = sib->next_sibling)
+                if (node_is(sib, "li")) num++;
+            snprintf(marker, sizeof marker, "%d.", num);
+        }
+        emit(c, marker, 0, indent);
+        int pad = (int)strlen(marker) + 1;
+        c->x = indent + pad;
+        walk_children(c, n, myattr, indent + pad, depth + 1);
         newline(c);
     } else if (strcmp(tag, "ul") == 0 || strcmp(tag, "ol") == 0) {
         if (c->x > indent) newline(c);

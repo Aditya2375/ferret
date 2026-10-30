@@ -22,26 +22,31 @@ static void usage(FILE *f) {
         "and listed at the end.\n");
 }
 
-/* Pull <style> blocks and <link>-free inline CSS out of the tree. */
-static void collect_css(struct node *n, char **buf, size_t *len, size_t *cap) {
-    if (node_is(n, "style")) {
-        for (struct node *c = n->first_child; c; c = c->next_sibling) {
-            if (c->type == NODE_TEXT && c->text) {
-                size_t add = strlen(c->text);
-                if (*len + add + 2 > *cap) {
-                    *cap = (*cap + add + 2) * 2;
-                    *buf = realloc(*buf, *cap);
-                    if (!*buf) { perror("realloc"); exit(1); }
+/* Pull <style> blocks and <link>-free inline CSS out of the tree.
+ * Iterative pre-order: deeply nested documents must not blow the stack. */
+static void collect_css(struct node *root, char **buf, size_t *len, size_t *cap) {
+    struct node *n = root;
+    while (n) {
+        if (node_is(n, "style")) {
+            for (struct node *c = n->first_child; c; c = c->next_sibling) {
+                if (c->type == NODE_TEXT && c->text) {
+                    size_t add = strlen(c->text);
+                    if (*len + add + 2 > *cap) {
+                        *cap = (*cap + add + 2) * 2;
+                        *buf = realloc(*buf, *cap);
+                        if (!*buf) { perror("realloc"); exit(1); }
+                    }
+                    memcpy(*buf + *len, c->text, add);
+                    *len += add;
+                    (*buf)[(*len)++] = '\n';
+                    (*buf)[*len] = '\0';
                 }
-                memcpy(*buf + *len, c->text, add);
-                *len += add;
-                (*buf)[(*len)++] = '\n';
-                (*buf)[*len] = '\0';
             }
         }
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n != root && !n->next_sibling) n = n->parent;
+        n = (n == root) ? NULL : n->next_sibling;
     }
-    for (struct node *c = n->first_child; c; c = c->next_sibling)
-        collect_css(c, buf, len, cap);
 }
 
 int main(int argc, char **argv) {

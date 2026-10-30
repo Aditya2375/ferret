@@ -1,7 +1,8 @@
 #ifndef FERRET_FETCH_H
 #define FERRET_FETCH_H
 
-/* Fetch a document. Supports file:// and plain http:// (port 80). */
+/* Fetch a document: file://, plain http:// (any port), and https://
+ * when built with TLS=1. Follows redirects. */
 struct document {
     char *body;         /* NUL-terminated content */
     long size;

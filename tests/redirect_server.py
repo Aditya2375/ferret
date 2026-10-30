@@ -7,7 +7,7 @@ class H(http.server.BaseHTTPRequestHandler):
         elif self.path == '/rel/page':
             self.send_response(302); self.send_header('Location', '/abs'); self.end_headers()
         elif self.path == '/abs':
-            self.send_response(301); self.send_header('Location', 'http://127.0.0.1:8799/final'); self.end_headers()
+            self.send_response(301); self.send_header('Location', '//127.0.0.1:8799/final'); self.end_headers()
         elif self.path == '/final':
             self.send_response(200); self.send_header('Content-Type','text/html'); self.end_headers()
             self.wfile.write(b'<html><body><h1>made it</h1></body></html>')
