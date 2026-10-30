@@ -1,7 +1,7 @@
 # ferret
 
-A terminal web browser written in C with no dependencies beyond libc. It
-fetches a page over HTTP or from disk, parses the HTML into a DOM, applies
+A terminal web browser written in C. It fetches a page over HTTP or HTTPS
+(OpenSSL, auto-detected at build time) or from disk, parses the HTML into a DOM, applies
 its CSS with a real cascade (specificity, source order, inline styles), and
 renders the result as styled ANSI text - headings, lists, tables, preformatted
 blocks, and a numbered link list.
@@ -14,9 +14,10 @@ $ ferret ./notes.html -w 100
 ## Quick start
 
 ```bash
-make
+make                    # auto-detects OpenSSL; TLS=0 opts out
 ./build/ferret tests/page.html            # local file
-./build/ferret http://127.0.0.1:8000/     # over HTTP
+./build/ferret https://example.com/       # over HTTPS
+./build/ferret http://127.0.0.1:8000/     # over plain HTTP
 ```
 
 Options: `-w cols` sets the render width (default 80), `--no-color` turns
@@ -37,9 +38,11 @@ off ANSI styling for piping or golden-file tests.
   preserved `pre` whitespace, horizontal rules, and heading hierarchy.
 - **Styling** - `font-weight`, `text-decoration`, and named `color` values
   map to bold, underline, and the ANSI palette.
-- **HTTP client** - HTTP/1.0 over raw sockets: redirects (301/302), error
-  reporting, connection-close bodies. `file://` URLs and bare paths read
-  from disk. No TLS - ferret is for the open web and local files.
+- **HTTP/HTTPS client** - HTTP/1.0 over raw sockets, with TLS via OpenSSL:
+  SNI, certificate verification against the system trust store, redirects
+  (301/302/307/308), error reporting, connection-close bodies. `file://`
+  URLs and bare paths read from disk. `make TLS=0` builds a
+  dependency-free binary without https support.
 
 ## Architecture
 

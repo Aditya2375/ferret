@@ -5,16 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- inline elements that stay in the text flow ---- */
-static int is_inline_tag(const char *tag) {
-    static const char *const t[] = {
-        "a", "b", "strong", "i", "em", "u", "s", "span", "code", "small",
-        "sub", "sup", "abbr", "mark", "q", "cite", "time", "kbd", NULL
-    };
-    for (int i = 0; t[i]; i++) if (strcmp(tag, t[i]) == 0) return 1;
-    return 0;
-}
-
 /* ---- output grid ---- */
 struct grid {
     char **cells;       /* [row][col] chars */
@@ -51,11 +41,6 @@ struct pen {
     char attr;          /* grid attr char */
     int indent;         /* current left indent in columns */
 };
-
-static int parse_px(const char *v, int dflt) {
-    if (!v) return dflt;
-    return (int)strtol(v, NULL, 10);
-}
 
 /* map common CSS colors to ANSI 30-37 */
 static int ansi_color(const char *v) {
@@ -263,7 +248,7 @@ static void walk(struct ctx *c, struct node *n, char attr, int indent) {
             int num = ++c->link_count;
             c->links[num - 1].url = strdup(href);
             c->links[num - 1].n = num;
-            char marker[8];
+            char marker[16];
             snprintf(marker, sizeof marker, "[%d]", num);
             emit(c, marker, 'u', indent);
         }

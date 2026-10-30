@@ -9,6 +9,20 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef USE_TLS
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#endif
+
+/* A connection is a plain socket, optionally wrapped in TLS. */
+struct conn {
+    int fd;
+#ifdef USE_TLS
+    SSL *ssl;
+    SSL_CTX *ctx;
+#endif
+};
+
 static struct document *doc_new(char *body, long size, const char *url) {
     struct document *d = calloc(1, sizeof *d);
     if (!d) { perror("calloc"); exit(1); }
@@ -60,19 +74,102 @@ static int connect_tcp(const char *host, const char *port) {
     return fd;
 }
 
+static int conn_open(struct conn *c, const char *host, const char *port, int tls,
+                     char *err, int err_cap) {
+    memset(c, 0, sizeof *c);
+    c->fd = connect_tcp(host, port);
+    if (c->fd < 0) {
+        snprintf(err, err_cap, "cannot connect to %s:%s", host, port);
+        return -1;
+    }
+#ifdef USE_TLS
+    if (tls) {
+        c->ctx = SSL_CTX_new(TLS_client_method());
+        if (!c->ctx) { snprintf(err, err_cap, "TLS setup failed"); goto fail; }
+        SSL_CTX_set_default_verify_paths(c->ctx);
+        c->ssl = SSL_new(c->ctx);
+        if (!c->ssl) { snprintf(err, err_cap, "TLS setup failed"); goto fail; }
+        SSL_set_tlsext_host_name(c->ssl, host);          /* SNI */
+        SSL_set1_host(c->ssl, host);                     /* verify the cert matches */
+        SSL_set_verify(c->ssl, SSL_VERIFY_PEER, NULL);
+        SSL_set_fd(c->ssl, c->fd);
+        if (SSL_connect(c->ssl) != 1) {
+            unsigned long e = ERR_get_error();
+            char buf[128] = "certificate problem";
+            if (e) ERR_error_string_n(e, buf, sizeof buf);
+            snprintf(err, err_cap, "TLS handshake with %s failed: %s", host, buf);
+            goto fail;
+        }
+    }
+#else
+    if (tls) {
+        snprintf(err, err_cap,
+                 "this ferret was built without TLS support; rebuild with make TLS=1");
+        goto fail;
+    }
+#endif
+    return 0;
+fail:
+    close(c->fd);
+#ifdef USE_TLS
+    if (c->ssl) SSL_free(c->ssl);
+    if (c->ctx) SSL_CTX_free(c->ctx);
+#endif
+    return -1;
+}
+
+static void conn_close(struct conn *c) {
+#ifdef USE_TLS
+    if (c->ssl) { SSL_shutdown(c->ssl); SSL_free(c->ssl); }
+    if (c->ctx) SSL_CTX_free(c->ctx);
+#endif
+    close(c->fd);
+}
+
+static ssize_t conn_read(struct conn *c, void *buf, size_t n) {
+#ifdef USE_TLS
+    if (c->ssl) {
+        int r = SSL_read(c->ssl, buf, (int)n);
+        return r > 0 ? r : 0;   /* clean close or error both end the body */
+    }
+#endif
+    return read(c->fd, buf, n);
+}
+
+static int conn_write_all(struct conn *c, const char *buf, size_t n) {
+    while (n) {
+        ssize_t w;
+#ifdef USE_TLS
+        if (c->ssl) {
+            int r = SSL_write(c->ssl, buf, (int)n);
+            w = r > 0 ? r : -1;
+        } else
+#endif
+            w = write(c->fd, buf, n);
+        if (w <= 0) return -1;
+        buf += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
 struct document *fetch_url(const char *url, char *err, int err_cap) {
     if (strncmp(url, "file://", 7) == 0)
         return fetch_file(url + 7, url, err, err_cap);
     if (strstr(url, "://") == NULL)  /* bare path: treat as local file */
         return fetch_file(url, url, err, err_cap);
-    if (strncmp(url, "http://", 7) != 0) {
-        snprintf(err, err_cap, "unsupported scheme (ferret speaks file:// and http://): %s", url);
+
+    int tls;
+    const char *p;
+    if (strncmp(url, "http://", 7) == 0)  { tls = 0; p = url + 7; }
+    else if (strncmp(url, "https://", 8) == 0) { tls = 1; p = url + 8; }
+    else {
+        snprintf(err, err_cap, "unsupported scheme (ferret speaks file://, http://, https://): %s", url);
         return NULL;
     }
 
-    /* http://host[:port]/path */
-    const char *p = url + 7;
-    char host[256] = {0}, port[8] = "80", path[1024] = "/";
+    char host[256] = {0}, port[8], path[1024] = "/";
+    snprintf(port, sizeof port, "%s", tls ? "443" : "80");
     const char *slash = strchr(p, '/');
     const char *hend = slash ? slash : p + strlen(p);
     const char *colon = memchr(p, ':', (size_t)(hend - p));
@@ -87,20 +184,22 @@ struct document *fetch_url(const char *url, char *err, int err_cap) {
 
     int redirects = 0;
 redirect:;
-    int fd = connect_tcp(host, port);
-    if (fd < 0) { snprintf(err, err_cap, "cannot connect to %s:%s", host, port); return NULL; }
+    struct conn c;
+    if (conn_open(&c, host, port, tls, err, err_cap) != 0) return NULL;
     char req[2048];
     int reqlen = snprintf(req, sizeof req,
         "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: ferret/1.0\r\n"
         "Accept: text/html\r\nConnection: close\r\n\r\n", path, host);
-    if (write(fd, req, (size_t)reqlen) != reqlen) {
-        close(fd); snprintf(err, err_cap, "write to %s failed", host); return NULL;
+    if (conn_write_all(&c, req, (size_t)reqlen) != 0) {
+        conn_close(&c);
+        snprintf(err, err_cap, "write to %s failed", host);
+        return NULL;
     }
     size_t cap = 1 << 20, len = 0;
     char *buf = malloc(cap + 1);
     if (!buf) { perror("malloc"); exit(1); }
     ssize_t n;
-    while ((n = read(fd, buf + len, cap - len)) > 0) {
+    while ((n = conn_read(&c, buf + len, cap - len)) > 0) {
         len += (size_t)n;
         if (len == cap) {
             cap *= 2;
@@ -108,7 +207,7 @@ redirect:;
             if (!buf) { perror("realloc"); exit(1); }
         }
     }
-    close(fd);
+    conn_close(&c);
     buf[len] = '\0';
 
     /* split headers */
@@ -116,16 +215,15 @@ redirect:;
     if (!hdr_end) { free(buf); snprintf(err, err_cap, "malformed HTTP response from %s", host); return NULL; }
     int status = 0;
     sscanf(buf, "HTTP/%*d.%*d %d", &status);
-    if ((status == 301 || status == 302) && redirects < 5) {
+    if ((status == 301 || status == 302 || status == 307 || status == 308) && redirects < 5) {
         char *loc = strcasestr(buf, "\r\nLocation:");
         if (loc) {
             loc += 11;
             while (*loc == ' ') loc++;
             char *eol = strstr(loc, "\r\n");
             if (eol) *eol = '\0';
-            /* only same-host relative/absolute redirects */
             if (loc[0] == '/') { snprintf(path, sizeof path, "%s", loc); }
-            else if (strncmp(loc, "http://", 7) == 0) {
+            else if (strstr(loc, "://")) {
                 free(buf);
                 return fetch_url(loc, err, err_cap);
             }

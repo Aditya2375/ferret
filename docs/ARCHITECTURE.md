@@ -51,8 +51,14 @@ pass walks the grid and emits ANSI escapes only when the attribute changes.
 
 Minimal HTTP/1.0: `Connection: close`, read to EOF, split headers at the
 first blank line, follow up to five redirects, report non-200 statuses.
-`file://` and bare paths bypass the socket entirely. There is deliberately
-no TLS; the failure message says so plainly.
+`file://` and bare paths bypass the socket entirely. TLS is an optional
+layer (`make TLS=1`, auto-detected when OpenSSL headers are present): the
+socket is wrapped in an OpenSSL client with SNI and full certificate
+verification against the system trust store - a bad certificate fails the
+fetch with the OpenSSL error, it never downgrades. Every read and write
+goes through `conn_read`/`conn_write_all`, so the HTTP code above the
+connection is identical with and without TLS. A `TLS=0` build is fully
+dependency-free and says so when asked for https.
 
 ## Testing
 
