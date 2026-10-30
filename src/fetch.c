@@ -2,11 +2,15 @@
 #include "fetch.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #ifdef USE_TLS
@@ -57,6 +61,16 @@ static struct document *fetch_file(const char *path, const char *url, char *err,
     return doc_new(body, size, url);
 }
 
+#define CONNECT_TIMEOUT_SECS 10
+#define IO_TIMEOUT_SECS      15
+
+static int set_io_timeouts(int fd) {
+    struct timeval tv = { .tv_sec = IO_TIMEOUT_SECS, .tv_usec = 0 };
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) < 0) return -1;
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) < 0) return -1;
+    return 0;
+}
+
 static int connect_tcp(const char *host, const char *port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_UNSPEC;
@@ -66,7 +80,27 @@ static int connect_tcp(const char *host, const char *port) {
     for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) continue;
-        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        /* non-blocking connect with a deadline: an unresponsive host must
+         * not hang the browser forever */
+        int flags = fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        int ok = connect(fd, ai->ai_addr, ai->ai_addrlen);
+        if (ok < 0 && errno == EINPROGRESS) {
+            fd_set wf;
+            FD_ZERO(&wf);
+            FD_SET(fd, &wf);
+            struct timeval tv = { .tv_sec = CONNECT_TIMEOUT_SECS, .tv_usec = 0 };
+            if (select(fd + 1, NULL, &wf, NULL, &tv) > 0) {
+                int soerr = 0;
+                socklen_t sl = sizeof soerr;
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl);
+                ok = soerr ? -1 : 0;
+            } else {
+                ok = -1;    /* timed out or select failed */
+            }
+        }
+        if (flags >= 0) fcntl(fd, F_SETFL, flags);
+        if (ok == 0 && set_io_timeouts(fd) == 0) break;
         close(fd);
         fd = -1;
     }
