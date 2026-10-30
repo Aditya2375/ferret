@@ -68,10 +68,13 @@ docs/    architecture notes
 
 ## Tested / not tested
 
-Tested here: 24 parser/cascade unit checks, a byte-exact golden render,
-fetching and rendering a live page over both http:// and https:// (real
-TLS with SNI and certificate verification), and rejection of a self-signed
-certificate.
+Tested here: 24 parser/cascade unit checks (including entities without
+semicolons, lone ampersands, and a 100k-deep document), a byte-exact
+golden render, fetching and rendering a live page over both http:// and
+https:// (real TLS with SNI and certificate verification), rejection of a
+self-signed certificate, a three-hop redirect chain covering relative,
+absolute-path, and absolute-URL Location values against a local server,
+a bounded redirect loop, and a 50k-deep page rendering without a crash.
 
 Not tested: JavaScript-heavy sites (ferret renders documents, there is no
 JS engine), chunked transfer encoding or keep-alive (HTTP/1.0
