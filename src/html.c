@@ -32,7 +32,6 @@ static struct node *node_new(enum node_type type) {
     struct node *n = calloc(1, sizeof *n);
     if (!n) { perror("calloc"); exit(1); }
     n->type = type;
-    n->style_index = -1;
     return n;
 }
 
@@ -128,12 +127,13 @@ static void add_text(struct node *parent, const char *start, const char *end) {
         if (*p == '&') {
             char ch;
             size_t used = decode_entity(p + 1, &ch);
-            t->text[w++] = ch;
-            /* advance past "&...;" when it looked like an entity */
-            const char *semi = memchr(p, ';', (size_t)(end - p));
-            if (p[1] == '#' && semi && semi - p < 12) p = semi + 1;
-            else if (semi && semi - p < 8 && used) p = semi + 1;
-            else p++;
+            if (used) {                 /* consume exactly the entity */
+                t->text[w++] = ch;
+                p += 1 + used;
+            } else {                    /* lone '&': emit it literally */
+                t->text[w++] = '&';
+                p++;
+            }
         } else if (isspace((unsigned char)*p)) {
             if (w > 0 && t->text[w-1] != ' ') t->text[w++] = ' ';
             p++;
@@ -272,14 +272,7 @@ struct node *html_parse(const char *source) {
     return ps.root;
 }
 
-void node_free(struct node *n) {
-    if (!n) return;
-    struct node *c = n->first_child;
-    while (c) {
-        struct node *next = c->next_sibling;
-        node_free(c);
-        c = next;
-    }
+static void node_free_one(struct node *n) {
     struct attr *a = n->attrs;
     while (a) {
         struct attr *next = a->next;
@@ -291,6 +284,19 @@ void node_free(struct node *n) {
     free(n->tag);
     free(n->text);
     free(n);
+}
+
+void node_free(struct node *n) {
+    /* Iterative post-order: documents nested tens of thousands of elements
+     * deep must not blow the call stack. */
+    while (n) {
+        if (n->first_child) { n = n->first_child; continue; }
+        struct node *parent = n->parent;
+        struct node *next = n->next_sibling;
+        if (parent) parent->first_child = next;  /* this child slot is consumed */
+        node_free_one(n);
+        n = next ? next : parent;
+    }
 }
 
 const char *node_attr(const struct node *n, const char *name) {
@@ -310,4 +316,23 @@ struct node *node_find(const struct node *n, const char *tag) {
         if (hit) return hit;
     }
     return NULL;
+}
+
+int node_collect_elements(struct node *root, struct node ***arr,
+                          int *count, int *cap) {
+    struct node *n = root;
+    while (n) {
+        if (n->type == NODE_ELEMENT && n->tag && n->tag[0] != '#') {
+            if (*count >= *cap) {
+                *cap = *cap ? *cap * 2 : 64;
+                *arr = realloc(*arr, (size_t)*cap * sizeof **arr);
+                if (!*arr) { perror("realloc"); exit(1); }
+            }
+            (*arr)[(*count)++] = n;
+        }
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n != root && !n->next_sibling) n = n->parent;
+        n = (n == root) ? NULL : n->next_sibling;
+    }
+    return *count;
 }

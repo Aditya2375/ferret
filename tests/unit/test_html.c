@@ -77,6 +77,27 @@ int main(void) {
           "lone ampersand literal");
     node_free(r);
 
+    /* extreme nesting: parse, collect, and free must not recurse */
+    {
+        int d = 100000;
+        size_t cap = (size_t)d * 11 + 8;
+        char *src = malloc(cap);
+        size_t w = 0;
+        for (int i = 0; i < d; i++) { memcpy(src + w, "<div>", 5); w += 5; }
+        src[w++] = 'x';
+        for (int i = 0; i < d; i++) { memcpy(src + w, "</div>", 6); w += 6; }
+        src[w] = '\0';
+        r = html_parse(src);
+        CHECK(r != NULL, "100k-deep document parses");
+        int count = 0, ecap = 0;
+        struct node **els = NULL;
+        node_collect_elements(r, &els, &count, &ecap);
+        CHECK(count >= d, "collect visits every deep element");
+        free(els);
+        node_free(r);   /* a recursive free would overflow the stack here */
+        free(src);
+    }
+
     /* garbage in, no crash */
     r = html_parse("<><<<<>>><//></p></div>text");
     CHECK(r != NULL, "garbage parses to a tree");

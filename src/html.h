@@ -25,6 +25,11 @@ struct node {
 struct node *html_parse(const char *source);
 void node_free(struct node *n);
 
+/* Collect elements in document order into a growable array. Iterative:
+   pathologically deep documents must not blow the call stack. */
+int node_collect_elements(struct node *root, struct node ***arr,
+                          int *count, int *cap);
+
 /* Element helpers */
 const char *node_attr(const struct node *n, const char *name);
 struct node *node_find(const struct node *n, const char *tag); /* first descendant */
