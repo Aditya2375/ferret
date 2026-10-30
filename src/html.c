@@ -32,6 +32,7 @@ static struct node *node_new(enum node_type type) {
     struct node *n = calloc(1, sizeof *n);
     if (!n) { perror("calloc"); exit(1); }
     n->type = type;
+    n->style_index = -1;
     return n;
 }
 

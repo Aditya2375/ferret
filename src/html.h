@@ -20,6 +20,7 @@ struct node {
     struct node *first_child;
     struct node *last_child;
     struct node *next_sibling;
+    int style_index;    /* slot in the css_apply result, -1 when unstyled */
 };
 
 struct node *html_parse(const char *source);

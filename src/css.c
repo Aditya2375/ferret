@@ -227,30 +227,16 @@ static void style_set(struct style *s, const char *property, const char *value) 
     s->decls = d;
 }
 
-/* Collect elements in pre-order. */
-static int collect(struct node *n, struct node ***arr, int *count, int *cap) {
-    if (n->type == NODE_ELEMENT && n->tag && n->tag[0] != '#') {
-        if (*count >= *cap) {
-            *cap = *cap ? *cap * 2 : 64;
-            *arr = realloc(*arr, (size_t)*cap * sizeof **arr);
-            if (!*arr) { perror("realloc"); exit(1); }
-        }
-        (*arr)[(*count)++] = n;
-    }
-    for (struct node *c = n->first_child; c; c = c->next_sibling)
-        collect(c, arr, count, cap);
-    return *count;
-}
-
 int css_apply(const struct stylesheet *ss, struct node *root, struct style **out) {
     struct node **els = NULL;
     int count = 0, cap = 0;
-    collect(root, &els, &count, &cap);
+    node_collect_elements(root, &els, &count, &cap);
     struct style *styles = calloc((size_t)count, sizeof *styles);
     if (!styles && count) { perror("calloc"); exit(1); }
 
     for (int i = 0; i < count; i++) {
         struct node *el = els[i];
+        el->style_index = i;    /* render looks styles up in O(1) */
         /* best declaration per property: (specificity, order) */
         struct { const char *property; const char *value; int spec, order; } best[64];
         int nbest = 0;

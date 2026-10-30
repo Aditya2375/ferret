@@ -77,7 +77,6 @@ struct ctx {
     struct grid g;
     int x, y;           /* cursor */
     int width;
-    struct node **els;  /* pre-order elements matching styles[] */
     struct style *styles;
     int nstyles;
     int link_count;
@@ -85,11 +84,9 @@ struct ctx {
 };
 
 static const struct style *style_of(struct ctx *c, const struct node *el) {
-    /* elements were collected in pre-order; walk to find index. O(n^2) worst
-       case is fine for documents of this scale. */
-    for (int i = 0; i < c->nstyles; i++)
-        if (c->els[i] == el) return &c->styles[i];
-    return NULL;
+    /* css_apply stamped each styled element with its slot: O(1) lookup. */
+    if (el->style_index < 0 || el->style_index >= c->nstyles) return NULL;
+    return &c->styles[el->style_index];
 }
 
 static void newline(struct ctx *c) { c->x = 0; c->y++; }
@@ -119,11 +116,27 @@ static void emit(struct ctx *c, const char *text, char attr, int indent) {
     }
 }
 
-static void walk(struct ctx *c, struct node *n, char attr, int indent);
+/* Beyond this nesting depth, styling stops and the subtree's text is
+ * emitted flat: the renderer must survive pathologically deep documents
+ * without blowing the call stack. */
+#define MAX_RENDER_DEPTH 256
 
-static void walk_children(struct ctx *c, struct node *n, char attr, int indent) {
+static void walk(struct ctx *c, struct node *n, char attr, int indent, int depth);
+
+static void walk_children(struct ctx *c, struct node *n, char attr, int indent, int depth) {
     for (struct node *k = n->first_child; k; k = k->next_sibling)
-        walk(c, k, attr, indent);
+        walk(c, k, attr, indent, depth);
+}
+
+/* Emit every text run in the subtree, iteratively, with no styling. */
+static void emit_deep_text(struct ctx *c, struct node *n, char attr, int indent) {
+    struct node *root = n;
+    while (n) {
+        if (n->type == NODE_TEXT && n->text) emit(c, n->text, attr, indent);
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n != root && !n->next_sibling) n = n->parent;
+        n = (n == root) ? NULL : n->next_sibling;
+    }
 }
 
 /* Render a simple table: fixed column widths from the widest cell. */
@@ -193,13 +206,14 @@ static void walk_table(struct ctx *c, struct node *table, char attr, int indent)
     newline(c);
 }
 
-static void walk(struct ctx *c, struct node *n, char attr, int indent) {
+static void walk(struct ctx *c, struct node *n, char attr, int indent, int depth) {
+    if (depth > MAX_RENDER_DEPTH) { emit_deep_text(c, n, attr, indent); return; }
     if (n->type == NODE_TEXT) {
         if (n->text) emit(c, n->text, attr, indent);
         return;
     }
     const char *tag = n->tag;
-    if (!tag || tag[0] == '#') { walk_children(c, n, attr, indent); return; }
+    if (!tag || tag[0] == '#') { walk_children(c, n, attr, indent, depth + 1); return; }
     if (strcmp(tag, "script") == 0 || strcmp(tag, "style") == 0 ||
         strcmp(tag, "head") == 0 || strcmp(tag, "title") == 0 ||
         strcmp(tag, "meta") == 0 || strcmp(tag, "link") == 0) return;
@@ -213,7 +227,7 @@ static void walk(struct ctx *c, struct node *n, char attr, int indent) {
     if (strcmp(tag, "h1") == 0 || strcmp(tag, "h2") == 0 ||
         strcmp(tag, "h3") == 0 || strcmp(tag, "h4") == 0) {
         blank_line(c);
-        walk_children(c, n, 'b', indent);
+        walk_children(c, n, 'b', indent, depth + 1);
         blank_line(c);
     } else if (strcmp(tag, "p") == 0 || strcmp(tag, "div") == 0 ||
                strcmp(tag, "section") == 0 || strcmp(tag, "article") == 0 ||
@@ -221,7 +235,7 @@ static void walk(struct ctx *c, struct node *n, char attr, int indent) {
                strcmp(tag, "main") == 0 || strcmp(tag, "blockquote") == 0) {
         if (c->x > indent) newline(c);
         int ind = strcmp(tag, "blockquote") == 0 ? indent + 4 : indent;
-        walk_children(c, n, myattr, ind);
+        walk_children(c, n, myattr, ind, depth + 1);
         newline(c);
     } else if (strcmp(tag, "br") == 0) {
         newline(c);
@@ -234,15 +248,15 @@ static void walk(struct ctx *c, struct node *n, char attr, int indent) {
         if (c->x < indent) c->x = indent;
         emit(c, "*", 0, indent);
         c->x = indent + 2;
-        walk_children(c, n, myattr, indent + 2);
+        walk_children(c, n, myattr, indent + 2, depth + 1);
         newline(c);
     } else if (strcmp(tag, "ul") == 0 || strcmp(tag, "ol") == 0) {
         if (c->x > indent) newline(c);
-        walk_children(c, n, myattr, indent + 2);
+        walk_children(c, n, myattr, indent + 2, depth + 1);
     } else if (strcmp(tag, "table") == 0) {
         walk_table(c, n, myattr, indent);
     } else if (strcmp(tag, "a") == 0) {
-        walk_children(c, n, myattr ? myattr : 'u', indent);
+        walk_children(c, n, myattr ? myattr : 'u', indent, depth + 1);
         const char *href = node_attr(n, "href");
         if (href && c->link_count < 256) {
             int num = ++c->link_count;
@@ -271,11 +285,11 @@ static void walk(struct ctx *c, struct node *n, char attr, int indent) {
                     if (nl) newline(c);
                     p = nl ? nl + 1 : e;
                 }
-            } else walk(c, k, 'b', indent);
+            } else walk(c, k, 'b', indent, depth + 1);
         }
         if (strcmp(tag, "pre") == 0) newline(c);
     } else {
-        walk_children(c, n, myattr, indent);
+        walk_children(c, n, myattr, indent, depth + 1);
     }
 }
 
@@ -289,21 +303,11 @@ int render_document(struct node *root, const struct stylesheet *ss,
     grid_init(&c.g, c.width);
     c.styles = NULL;
     c.nstyles = css_apply(ss, root, &c.styles);
-    /* rebuild the same pre-order element list used by css_apply */
-    {
-        extern int ferret_collect(struct node *, struct node ***, int *, int *);
-        int count = 0, cap = 0;
-        ferret_collect(root, &c.els, &count, &cap);
-        c.nstyles = count;
-    }
 
     struct node *body = node_find(root, "body");
-    walk(&c, body ? body : root, 0, 0);
+    walk(&c, body ? body : root, 0, 0, 0);
     newline(&c);
 
-    /* print with ANSI attrs */
-    static const char *const codes[256] = {0};
-    (void)codes;
     for (int r = 0; r < c.g.rows; r++) {
         char cur = -1;
         for (int col = 0; col < c.g.cols; col++) {
@@ -336,21 +340,6 @@ int render_document(struct node *root, const struct stylesheet *ss,
     free(c.g.attrs);
     for (int i = 0; i < c.link_count; i++) free(c.links[i].url);
     styles_free(c.styles, c.nstyles);
-    free(c.els);
     return c.g.rows;
-}
 
-/* shared collect used by render to mirror css_apply order */
-int ferret_collect(struct node *n, struct node ***arr, int *count, int *cap) {
-    if (n->type == NODE_ELEMENT && n->tag && n->tag[0] != '#') {
-        if (*count >= *cap) {
-            *cap = *cap ? *cap * 2 : 64;
-            *arr = realloc(*arr, (size_t)*cap * sizeof **arr);
-            if (!*arr) { perror("realloc"); exit(1); }
-        }
-        (*arr)[(*count)++] = n;
-    }
-    for (struct node *c = n->first_child; c; c = c->next_sibling)
-        ferret_collect(c, arr, count, cap);
-    return *count;
 }

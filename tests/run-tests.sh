@@ -33,5 +33,13 @@ if command -v python3 >/dev/null; then
     kill $SRV 2>/dev/null
     trap - EXIT
     echo "REDIRECT TESTS PASSED"
+
+    # extreme nesting: styling is depth-capped, content must survive
+    python3 -c "
+d = 50000
+open('$OUT/deep.html', 'w').write('<html><body>' + '<div>' * d + 'DEEP CONTENT' + '</div>' * d + '</body></html>')"
+    timeout 60 ./build/ferret "$OUT/deep.html" --no-color | grep -q 'DEEP CONTENT' \
+        || { echo "deep nesting crashed or lost content"; exit 1; }
+    echo "DEEP RENDER PASSED"
 fi
 echo "ALL TESTS PASSED"
