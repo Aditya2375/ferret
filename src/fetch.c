@@ -243,12 +243,17 @@ static int resolve_redirect(struct url_parts *u, const char *loc,
     if (loc[0] == '/' && loc[1] == '/') {
         /* scheme-relative target: keep the current scheme */
         char abs[2048];
-        snprintf(abs, sizeof abs, "%s:%s", u->tls ? "https" : "http", loc);
+        const char *scheme = u->tls ? "https" : "http";
+        size_t slen = strlen(scheme), llen = strlen(loc);
+        if (slen + 1 + llen + 1 > sizeof abs) goto toolong;
+        memcpy(abs, scheme, slen);
+        abs[slen] = ':';
+        memcpy(abs + slen + 1, loc, llen + 1);
         return parse_http_url(abs, u, err, err_cap);
     }
     if (loc[0] == '/') {
         if (strlen(loc) >= sizeof u->path) goto toolong;
-        snprintf(u->path, sizeof u->path, "%s", loc);
+        memcpy(u->path, loc, strlen(loc) + 1);
     } else {
         char *last = strrchr(u->path, '/');   /* path always starts with / */
         size_t dirlen = (size_t)(last + 1 - u->path);
