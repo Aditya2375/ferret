@@ -15,6 +15,11 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(302); self.send_header('Location', 'http://127.0.0.1:8799/loop2'); self.end_headers()
         elif self.path == '/loop2':
             self.send_response(302); self.send_header('Location', '/loop1'); self.end_headers()
+        elif self.path == '/huge':
+            self.send_response(200); self.send_header('Content-Type','text/html'); self.end_headers()
+            try:
+                while True: self.wfile.write(b'<p>filler</p>' * 1000)
+            except (BrokenPipeError, ConnectionResetError): pass
         else:
             self.send_response(404); self.end_headers()
 srv = http.server.HTTPServer(('127.0.0.1', 8799), H)

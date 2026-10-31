@@ -30,6 +30,11 @@ if command -v python3 >/dev/null; then
     if ./build/ferret http://127.0.0.1:8799/loop1 > /dev/null 2>&1; then
         echo "redirect loop was not bounded"; exit 1
     fi
+    # an unbounded response must hit the body-size limit, not eat memory
+    if ./build/ferret http://127.0.0.1:8799/huge > /dev/null 2> "$OUT/huge.err"; then
+        echo "unbounded response was accepted"; exit 1
+    fi
+    grep -q "exceeds the 8 MiB limit" "$OUT/huge.err" || { echo "wrong size-limit error:"; cat "$OUT/huge.err"; exit 1; }
     kill $SRV 2>/dev/null
     trap - EXIT
     echo "REDIRECT TESTS PASSED"

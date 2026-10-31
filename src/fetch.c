@@ -152,6 +152,9 @@ fail:
     return -1;
 }
 
+/* largest response body ferret will hold in memory */
+#define FERRET_MAX_BODY (8 << 20)
+
 static void conn_close(struct conn *c) {
 #ifdef USE_TLS
     if (c->ssl) { SSL_shutdown(c->ssl); SSL_free(c->ssl); }
@@ -293,7 +296,17 @@ struct document *fetch_url(const char *url, char *err, int err_cap) {
         while ((n = conn_read(&c, buf + len, cap - len)) > 0) {
             len += (size_t)n;
             if (len == cap) {
+                /* a text browser has no business holding unbounded pages:
+                   stop at a hard ceiling instead of eating all memory */
+                if (cap >= FERRET_MAX_BODY) {
+                    conn_close(&c);
+                    free(buf);
+                    snprintf(err, err_cap, "response from %s exceeds the %d MiB limit",
+                             u.host, FERRET_MAX_BODY >> 20);
+                    return NULL;
+                }
                 cap *= 2;
+                if (cap > FERRET_MAX_BODY) cap = FERRET_MAX_BODY;
                 buf = realloc(buf, cap + 1);
                 if (!buf) { perror("realloc"); exit(1); }
             }
