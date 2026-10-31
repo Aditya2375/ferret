@@ -111,6 +111,13 @@ static int connect_tcp(const char *host, const char *port) {
 static int conn_open(struct conn *c, const char *host, const char *port, int tls,
                      char *err, int err_cap) {
     memset(c, 0, sizeof *c);
+#ifndef USE_TLS
+    if (tls) {
+        snprintf(err, err_cap,
+                 "this ferret was built without TLS support; rebuild with make TLS=1");
+        return -1;
+    }
+#endif
     c->fd = connect_tcp(host, port);
     if (c->fd < 0) {
         snprintf(err, err_cap, "cannot connect to %s:%s", host, port);
@@ -135,21 +142,15 @@ static int conn_open(struct conn *c, const char *host, const char *port, int tls
             goto fail;
         }
     }
-#else
-    if (tls) {
-        snprintf(err, err_cap,
-                 "this ferret was built without TLS support; rebuild with make TLS=1");
-        goto fail;
-    }
 #endif
     return 0;
+#ifdef USE_TLS
 fail:
     close(c->fd);
-#ifdef USE_TLS
     if (c->ssl) SSL_free(c->ssl);
     if (c->ctx) SSL_CTX_free(c->ctx);
-#endif
     return -1;
+#endif
 }
 
 /* largest response body ferret will hold in memory */
