@@ -25,11 +25,22 @@ static const char *skip_ws_comments(const char *p) {
 
 static void selector_free(struct selector *sel);
 
+/* free one in-progress part (not yet counted in sel->nparts) */
+static void part_clear(struct selector_part *p) {
+    for (int k = 0; k < p->ncls; k++) free(p->cls[k]);
+    free(p->tag);
+    free(p->id);
+    memset(p, 0, sizeof *p);
+}
+
+/* Parse one selector. Ownership: on failure every allocation made so
+   far is released here and *sel is left zeroed; the caller frees only
+   on success. */
 static int selector_parse(const char *s, size_t len, struct selector *sel) {
     memset(sel, 0, sizeof *sel);
     size_t i = 0;
     while (i < len) {
-        if (sel->nparts >= 8) return 0;
+        if (sel->nparts >= 8) { selector_free(sel); return 0; }
         struct selector_part *part = &sel->parts[sel->nparts];
         memset(part, 0, sizeof *part);
         /* optional tag */
@@ -46,17 +57,17 @@ static int selector_parse(const char *s, size_t len, struct selector *sel) {
             char kind = s[i++];
             start = i;
             while (i < len && (isalnum((unsigned char)s[i]) || s[i] == '-' || s[i] == '_')) i++;
-            if (i == start) { selector_free(sel); return 0; }
+            if (i == start) { part_clear(part); selector_free(sel); memset(sel, 0, sizeof *sel); return 0; }
             char *v = xstrndup(s + start, i - start);
             if (kind == '.') {
-                if (part->ncls >= SELECTOR_MAX_CLASSES) { free(v); selector_free(sel); return 0; }
+                if (part->ncls >= SELECTOR_MAX_CLASSES) { free(v); part_clear(part); selector_free(sel); memset(sel, 0, sizeof *sel); return 0; }
                 part->cls[part->ncls++] = v;
             } else {
                 free(part->id);
                 part->id = v;
             }
         }
-        if (!part->tag && !part->id && part->ncls == 0) return 0;
+        if (!part->tag && !part->id && part->ncls == 0) { selector_free(sel); memset(sel, 0, sizeof *sel); return 0; }
         sel->nparts++;
         while (i < len && isspace((unsigned char)s[i])) i++;  /* descendant combinator */
     }
@@ -136,8 +147,6 @@ struct stylesheet *css_parse(const char *source) {
                 r->order = ss->count++;
                 *tail = r;
                 tail = &r->next;
-            } else {
-                selector_free(&sel);
             }
             s = comma ? comma + 1 : open;
         }
