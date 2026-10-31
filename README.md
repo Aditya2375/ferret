@@ -1,5 +1,7 @@
 # ferret
 
+**[Render pages live in your browser](https://aditya2375.github.io/ferret/)** - the real engine compiled to WebAssembly, no install.
+
 A terminal web browser written in C. It fetches a page over HTTP or HTTPS
 (OpenSSL, auto-detected at build time) or from disk, parses the HTML into a DOM, applies
 its CSS with a real cascade (specificity, source order, inline styles), and

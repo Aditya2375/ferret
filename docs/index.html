@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ferret - a text browser, live in your browser</title>
+<style>
+  :root { --bg: #0d1117; --panel: #161b22; --edge: #30363d; --fg: #7ee787; --dim: #8b949e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h1 .star { color: var(--dim); font-weight: normal; }
+  p.sub { color: var(--dim); margin: 0 0 20px; }
+  a { color: #58a6ff; }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; margin-bottom: 16px; }
+  .panel header { padding: 8px 12px; border-bottom: 1px solid var(--edge); color: var(--dim); font-size: 12px; }
+  textarea { width: 100%; min-height: 220px; background: transparent; color: var(--fg); border: 0;
+             padding: 12px; font: inherit; resize: vertical; outline: none; display: block; }
+  #page { padding: 0; overflow-x: auto; }
+  #page pre { margin: 0; padding: 12px; font: inherit; line-height: 1.2; }
+  .row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  button { background: #21262d; color: var(--fg); border: 1px solid var(--edge);
+           border-radius: 6px; padding: 6px 14px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--fg); }
+  button:disabled { opacity: .5; cursor: wait; }
+  label { color: var(--dim); }
+  input[type=number] { width: 64px; background: #21262d; color: var(--fg);
+                       border: 1px solid var(--edge); border-radius: 6px; padding: 5px 8px; font: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ferret <span class="star">- a text-mode web browser</span></h1>
+  <p class="sub">The real rendering engine (html.c, css.c, render.c) compiled to WebAssembly.
+     The network stack needs sockets, so you supply the HTML.
+     <a href="https://github.com/Aditya2375/ferret">Source on GitHub</a>.</p>
+
+  <div class="row">
+    <button id="render" disabled>loading engine...</button>
+    <label>columns <input type="number" id="cols" value="80" min="20" max="200"></label>
+    <button id="sample">reset sample page</button>
+  </div>
+
+  <div class="panel">
+    <header>page.html - edit me</header>
+    <textarea id="src" spellcheck="false"></textarea>
+  </div>
+
+  <div class="panel">
+    <header>rendered page</header>
+    <div id="page"><pre id="out"></pre></div>
+  </div>
+</main>
+
+<script src="ferret.js"></script>
+<script>
+const SAMPLE = `<!DOCTYPE html>
+<html>
+<head>
+<style>
+h1 { color: red }
+.note { color: blue }
+a { text-decoration: underline }
+</style>
+</head>
+<body>
+<h1>The daily ferret</h1>
+<p class="note">A browser inside a browser: this page is parsed,
+styled and laid out by the ferret engine compiled to WASM.</p>
+<h2>Why text?</h2>
+<ul>
+<li>every layout decision is visible</li>
+<li>no tracking pixels fit in a grid</li>
+</ul>
+<ol>
+<li>parse the HTML into a DOM</li>
+<li>apply the stylesheet</li>
+<li>render to a character grid</li>
+</ol>
+<table>
+<tr><th>engine part</th><th>file</th></tr>
+<tr><td>parser</td><td>html.c</td></tr>
+<tr><td>style</td><td>css.c</td></tr>
+<tr><td>layout</td><td>render.c</td></tr>
+</table>
+<p>Read the <a href="https://github.com/Aditya2375/ferret">source</a> for details.</p>
+</body>
+</html>
+`;
+const src = document.getElementById("src");
+const out = document.getElementById("out");
+const btn = document.getElementById("render");
+const cols = document.getElementById("cols");
+src.value = SAMPLE;
+document.getElementById("sample").onclick = () => { src.value = SAMPLE; };
+
+/* ANSI subset ferret emits: reset, bold, underline, fg 30-37, bright-black */
+function ansiToHtml(text) {
+  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const colors = ["#000","#f85149","#7ee787","#e3b341","#58a6ff","#d2a8ff","#39c5cf","#c9d1d9"];
+  let open = false;
+  const s = esc.replace(/\033\[([0-9;]*)m/g, (_, codes) => {
+    let style = "";
+    for (const c of codes.split(";")) {
+      if (c === "0" || c === "") style = "";
+      else if (c === "1") style += "font-weight:bold;";
+      else if (c === "4") style += "text-decoration:underline;";
+      else if (c === "90") style += "color:#6e7681;";
+      else if (+c >= 30 && +c <= 37) style += "color:" + colors[+c - 30] + ";";
+    }
+    const close = open ? "</span>" : "";
+    open = style.length > 0;
+    return close + (open ? `<span style="${style}">` : "");
+  });
+  return s + (open ? "</span>" : "");
+}
+
+let mod = null, lines = [];
+FerretModule({ print: (t) => lines.push(t) }).then((m) => {
+  mod = m;
+  btn.disabled = false;
+  btn.textContent = "render";
+  btn.onclick();
+});
+btn.onclick = () => {
+  lines = [];
+  mod.ccall("ferret_render", null, ["string", "number"], [src.value, +cols.value || 80]);
+  out.innerHTML = ansiToHtml(lines.join("\n"));
+};
+</script>
+</body>
+</html>
