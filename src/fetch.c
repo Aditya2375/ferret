@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -24,6 +25,7 @@ struct conn {
 #ifdef USE_TLS
     SSL *ssl;
     SSL_CTX *ctx;
+    int eof_warned;
 #endif
 };
 
@@ -46,8 +48,17 @@ void document_free(struct document *d) {
 static struct document *fetch_file(const char *path, const char *url, char *err, int cap) {
     FILE *f = fopen(path, "rb");
     if (!f) { snprintf(err, cap, "cannot open %s", path); return NULL; }
+    /* a directory "reads" as ftell LONG_MAX on some systems: reject
+       anything that is not a regular file before sizing the buffer */
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || !S_ISREG(st.st_mode)) {
+        fclose(f);
+        snprintf(err, cap, "not a regular file: %s", path);
+        return NULL;
+    }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
+    if (size < 0) { fclose(f); snprintf(err, cap, "cannot read %s", path); return NULL; }
     fseek(f, 0, SEEK_SET);
     char *body = malloc((size_t)size + 1);
     if (!body) { perror("malloc"); exit(1); }
@@ -168,7 +179,25 @@ static ssize_t conn_read(struct conn *c, void *buf, size_t n) {
 #ifdef USE_TLS
     if (c->ssl) {
         int r = SSL_read(c->ssl, buf, (int)n);
-        return r > 0 ? r : 0;   /* clean close or error both end the body */
+        if (r > 0) return r;
+        int e = SSL_get_error(c->ssl, r);
+        if (e == SSL_ERROR_ZERO_RETURN) return 0;   /* clean close_notify */
+        /* HTTP/1.0 bodies are close-delimited and plenty of servers drop
+           the TLS connection without close_notify. Accept the body but
+           say so, once; anything with a real errno stays a hard error. */
+        if (e == SSL_ERROR_SSL &&
+            ERR_GET_REASON(ERR_peek_last_error()) == SSL_R_UNEXPECTED_EOF_WHILE_READING)
+            e = SSL_ERROR_SYSCALL, errno = 0;   /* OpenSSL 3's spelling of the same case */
+        if (e == SSL_ERROR_SYSCALL && errno == 0) {
+            if (!c->eof_warned) {
+                c->eof_warned = 1;
+                fprintf(stderr,
+                        "ferret: TLS connection closed without close_notify; "
+                        "body may be truncated\n");
+            }
+            return 0;
+        }
+        return -1;
     }
 #endif
     return read(c->fd, buf, n);
@@ -318,6 +347,13 @@ struct document *fetch_url(const char *url, char *err, int err_cap) {
             }
         }
         conn_close(&c);
+        if (n < 0) {
+            /* timeout or TLS failure mid-body: refuse to render a
+               truncated page as if it were complete */
+            free(buf);
+            snprintf(err, err_cap, "read from %s failed (timeout or TLS error)", u.host);
+            return NULL;
+        }
         buf[len] = '\0';
 
         hdr_end = strstr(buf, "\r\n\r\n");
@@ -330,6 +366,7 @@ struct document *fetch_url(const char *url, char *err, int err_cap) {
         sscanf(buf, "HTTP/%*d.%*d %d", &status);
         if ((status == 301 || status == 302 || status == 307 || status == 308)
                 && redirects < 5) {
+            *hdr_end = '\0';   /* Location is a header: never match the body */
             char *loc = strcasestr(buf, "\r\nLocation:");
             if (loc) {
                 loc += 11;

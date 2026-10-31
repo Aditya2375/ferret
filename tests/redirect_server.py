@@ -15,6 +15,14 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(302); self.send_header('Location', 'http://127.0.0.1:8799/loop2'); self.end_headers()
         elif self.path == '/loop2':
             self.send_response(302); self.send_header('Location', '/loop1'); self.end_headers()
+        elif self.path == '/stall':
+            self.send_response(200); self.send_header('Content-Type','text/html'); self.end_headers()
+            self.wfile.write(b'<html><body><h1>partial page</h1>')
+            self.wfile.flush()
+            time.sleep(30)   # outlast the client read timeout
+        elif self.path == '/fake-location':
+            self.send_response(301); self.send_header('Content-Type','text/html'); self.end_headers()
+            self.wfile.write(b'<html><body>stray text\r\nLocation: /final\r\n</body></html>')
         elif self.path == '/huge':
             self.send_response(200); self.send_header('Content-Type','text/html'); self.end_headers()
             try:

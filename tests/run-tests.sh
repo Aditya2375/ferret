@@ -35,6 +35,22 @@ if command -v python3 >/dev/null; then
         echo "unbounded response was accepted"; exit 1
     fi
     grep -q "exceeds the 8 MiB limit" "$OUT/huge.err" || { echo "wrong size-limit error:"; cat "$OUT/huge.err"; exit 1; }
+    # a body cut off mid-stream must not render as a complete page
+    if ./build/ferret http://127.0.0.1:8799/stall > /dev/null 2> "$OUT/stall.err"; then
+        echo "stalled response rendered as complete"; exit 1
+    fi
+    grep -q "read from" "$OUT/stall.err" || { echo "wrong stall error:"; cat "$OUT/stall.err"; exit 1; }
+    # a Location line inside the body is not a redirect: a 301 with no
+    # real Location header is an error, never a jump to body text
+    if ./build/ferret http://127.0.0.1:8799/fake-location > /dev/null 2> "$OUT/fakeloc.err"; then
+        echo "301 without Location followed or rendered"; exit 1
+    fi
+    grep -q "HTTP 301" "$OUT/fakeloc.err" || { echo "wrong no-Location error:"; cat "$OUT/fakeloc.err"; exit 1; }
+    # a directory is not an HTML file (old builds tried to malloc LONG_MAX)
+    if ./build/ferret /tmp > /dev/null 2> "$OUT/dir.err"; then
+        echo "directory accepted as input"; exit 1
+    fi
+    grep -q "not a regular file" "$OUT/dir.err" || { echo "wrong directory error:"; cat "$OUT/dir.err"; exit 1; }
     kill $SRV 2>/dev/null
     trap - EXIT
     echo "REDIRECT TESTS PASSED"
